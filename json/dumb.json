@@ -1,0 +1,62 @@
+{
+  "name": "DUMB",
+  "slug": "dumb",
+  "categories": [
+    13,
+    14
+  ],
+  "date_created": "2026-08-17",
+  "type": "ct",
+  "updateable": true,
+  "privileged": false,
+  "interface_port": 3005,
+  "documentation": "https://dumbarr.com/deployment/proxmox/",
+  "website": "https://dumbarr.com",
+  "repository": "https://github.com/I-am-PUID-0/DUMB",
+  "logo": "https://dumbarr.com/assets/images/logo.png",
+  "description": "Distributed Unlimited Media Bridge is an all-in-one media automation platform for Debrid and Usenet workflows, including service management, onboarding and embedded access to supported Arr, download, mount and media-server applications.",
+  "install_methods": [
+    {
+      "type": "default",
+      "script": "ct/dumb.sh",
+      "config_path": "/config/dumb_config.json",
+      "resources": {
+        "cpu": 4,
+        "ram": 8192,
+        "hdd": 40,
+        "os": "Debian",
+        "version": "13"
+      }
+    }
+  ],
+  "default_credentials": {
+    "username": null,
+    "password": null
+  },
+  "notes": [
+    {
+      "text": "DUMB and the services it manages are installed directly in the LXC; this script does not install Docker.",
+      "type": "info"
+    },
+    {
+      "text": "FUSE is enabled for DUMB-managed rclone and filesystem mounts. When all dependent services run inside this LXC, no host mount propagation is required.",
+      "type": "info"
+    },
+    {
+      "text": "If Plex, an Arr app, or another consumer runs outside this LXC, its access to DUMB-created mounts must be configured separately on the Proxmox host. The installer does not expose those mounts automatically.",
+      "type": "warning"
+    },
+    {
+      "text": "The first start can take several minutes while DUMB installs and configures the selected service stack. Follow progress with: journalctl -u dumb -f",
+      "type": "info"
+    },
+    {
+      "text": "Run update inside the LXC for a candidate-first DUMB controller update with health verification and automatic rollback. Update individual managed services through the DUMB Updates interface.",
+      "type": "info"
+    },
+    {
+      "text": "The ARM64 path is implemented but remains marked unverified until it passes the same clean Proxmox VE installation, reboot, FUSE, backup, restore, and update tests as AMD64.",
+      "type": "warning"
+    }
+  ]
+}
