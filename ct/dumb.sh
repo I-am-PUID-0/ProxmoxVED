@@ -17,11 +17,10 @@ var_ram="${var_ram:-8192}"
 var_disk="${var_disk:-40}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
-#var_arm64="${var_arm64:-no}" # unset = ask the user; set yes/no only when verified
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 var_fuse="${var_fuse:-yes}"
 var_gpu="${var_gpu:-yes}"
-var_testurl="${var_testurl:-https://github.com/I-am-PUID-0/DUMB/issues/312}"
 
 header_info "$APP"
 variables
@@ -60,6 +59,29 @@ EOF
       ln -sfn /dev/null "/etc/systemd/system/${unit}"
     done
     systemctl daemon-reload
+  }
+
+  reconcile_pgadmin_runtime() {
+    local passlib_pwd
+    if [[ ! -x /pgadmin/venv/bin/python ]]; then
+      return
+    fi
+    passlib_pwd=$(find /pgadmin/venv/lib -path '*/site-packages/passlib/pwd.py' -type f -print -quit)
+    if [[ -z "$passlib_pwd" ]]; then
+      msg_error "The pgAdmin Passlib runtime was not found"
+      exit 1
+    fi
+    if grep -qxF 'import pkg_resources' "$passlib_pwd"; then
+      sed -i \
+        -e 's/^import pkg_resources$/from importlib import resources/' \
+        -e 's/return pkg_resources\.resource_stream(package, subpath)/return resources.files(package).joinpath(subpath).open("rb")/' \
+        "$passlib_pwd"
+    fi
+    if grep -qF 'pkg_resources' "$passlib_pwd"; then
+      msg_error "Failed to apply the pgAdmin Passlib compatibility fix"
+      exit 1
+    fi
+    $STD /pgadmin/venv/bin/python -c 'from passlib.pwd import genword; assert genword(entropy=12)'
   }
 
   rollback_dumb_update() {
@@ -110,6 +132,10 @@ EOF
   configure_native_supervision
   msg_ok "Reconciled DUMB Native Service Supervision"
 
+  msg_info "Reconciling pgAdmin Runtime"
+  reconcile_pgadmin_runtime
+  msg_ok "Reconciled pgAdmin Runtime"
+
   if [[ -f "$backup_dir/.manifest" ]]; then
     msg_warn "Recovering an interrupted DUMB controller update"
     if grep -qxF /opt/dumb "$backup_dir/.manifest"; then
@@ -156,8 +182,8 @@ EOF
     DOTNET_VERSION="10" DOTNET_TYPE="sdk" setup_dotnet
     UV_PYTHON_INSTALL_DIR="/opt/dumb-python" PYTHON_VERSION="3.11" setup_uv
 
-    msg_info "Reconciling DUMB Python Runtimes"
-    $STD env UV_PYTHON_INSTALL_DIR=/opt/dumb-python uv python install 3.12
+    UV_PYTHON_INSTALL_DIR="/opt/dumb-python" PYTHON_VERSION="3.12" setup_uv
+    msg_info "Reconciling DUMB Python Runtime Links"
     local python_311 python_312
     python_311=$(find /opt/dumb-python -path '*/bin/python3.11' -type f -print -quit)
     python_312=$(find /opt/dumb-python -path '*/bin/python3.12' -type f -print -quit)
@@ -167,7 +193,7 @@ EOF
     fi
     ln -sfn "$python_311" /usr/local/bin/python3.11
     ln -sfn "$python_312" /usr/local/bin/python3.12
-    msg_ok "Reconciled DUMB Python Runtimes"
+    msg_ok "Reconciled DUMB Python Runtime Links"
 
     if [[ ! -e /root/.dumb ]]; then
       touch /root/.dumb

@@ -42,14 +42,14 @@ setup_go
 DOTNET_VERSION="10" DOTNET_TYPE="sdk" setup_dotnet
 UV_PYTHON_INSTALL_DIR="/opt/dumb-python" PYTHON_VERSION="3.11" setup_uv
 
-msg_info "Installing Additional Python Runtimes"
-$STD env UV_PYTHON_INSTALL_DIR=/opt/dumb-python uv python install 3.12
+UV_PYTHON_INSTALL_DIR="/opt/dumb-python" PYTHON_VERSION="3.12" setup_uv
+msg_info "Configuring DUMB Python Runtime Links"
 PYTHON_311=$(find /opt/dumb-python -path '*/bin/python3.11' -type f -print -quit)
 PYTHON_312=$(find /opt/dumb-python -path '*/bin/python3.12' -type f -print -quit)
 [[ -n "$PYTHON_311" && -n "$PYTHON_312" ]]
 ln -sfn "$PYTHON_311" /usr/local/bin/python3.11
 ln -sfn "$PYTHON_312" /usr/local/bin/python3.12
-msg_ok "Installed Additional Python Runtimes"
+msg_ok "Configured DUMB Python Runtime Links"
 
 PG_VERSION="16" setup_postgresql
 $STD apt install -y postgresql-server-dev-16 postgresql-contrib-16 pgagent
@@ -97,6 +97,19 @@ msg_info "Setting up pgAdmin Environment"
 $STD uv venv --seed --python 3.11 /pgadmin/venv
 $STD uv pip install --python /pgadmin/venv/bin/python pgadmin4
 $STD uv pip check --python /pgadmin/venv/bin/python
+PASSLIB_PWD=$(find /pgadmin/venv/lib -path '*/site-packages/passlib/pwd.py' -type f -print -quit)
+[[ -n "$PASSLIB_PWD" ]]
+if grep -qxF 'import pkg_resources' "$PASSLIB_PWD"; then
+  sed -i \
+    -e 's/^import pkg_resources$/from importlib import resources/' \
+    -e 's/return pkg_resources\.resource_stream(package, subpath)/return resources.files(package).joinpath(subpath).open("rb")/' \
+    "$PASSLIB_PWD"
+fi
+if grep -qF 'pkg_resources' "$PASSLIB_PWD"; then
+  msg_error "Failed to apply the pgAdmin Passlib compatibility fix"
+  exit 1
+fi
+$STD /pgadmin/venv/bin/python -c 'from passlib.pwd import genword; assert genword(entropy=12)'
 msg_ok "Set up pgAdmin Environment"
 
 msg_info "Configuring DUMB"

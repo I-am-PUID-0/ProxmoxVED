@@ -9,6 +9,7 @@
   "type": "ct",
   "updateable": true,
   "privileged": false,
+  "architectures": ["amd64", "arm64"],
   "interface_port": 3005,
   "documentation": "https://dumbarr.com/deployment/proxmox/",
   "website": "https://dumbarr.com",
@@ -53,10 +54,6 @@
     {
       "text": "Run update inside the LXC for a candidate-first DUMB controller update with health verification and automatic rollback. Update individual managed services through the DUMB Updates interface.",
       "type": "info"
-    },
-    {
-      "text": "The ARM64 path is implemented but remains marked unverified until it passes the same clean Proxmox VE installation, reboot, FUSE, backup, restore, and update tests as AMD64.",
-      "type": "warning"
     }
   ]
 }
