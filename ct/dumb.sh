@@ -21,6 +21,7 @@ var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 var_fuse="${var_fuse:-yes}"
 var_gpu="${var_gpu:-yes}"
+export var_dumb_branch="${var_dumb_branch:-latest}"
 
 header_info "$APP"
 variables
@@ -34,6 +35,12 @@ function update_script() {
 
   local backup_dir="/opt/dumb-update-backup"
   local candidate_dir="/opt/dumb.candidate"
+  local controller_source_file="/etc/dumb/controller-source"
+  local controller_source="release"
+  local controller_branch=""
+  local source_changed=0
+  local update_available=0
+  local update_check_status=0
   local marker_created=0
   local activated=0
   local ready=0
@@ -82,6 +89,56 @@ EOF
       exit 1
     fi
     $STD /pgadmin/venv/bin/python -c 'from passlib.pwd import genword; assert genword(entropy=12)'
+  }
+
+  reconcile_zurg_support_files() {
+    local source_dir="/tmp/dumb-zurg-support"
+    if [[ -s /zurg/config.yml && -s /zurg/plex_update.sh ]]; then
+      return
+    fi
+
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_branch "dumb-zurg-support" "debridmediamanager/zurg-public" "main" "$source_dir"
+    if [[ ! -s "$source_dir/config.yml" || ! -s "$source_dir/scripts/plex_update.sh" ]]; then
+      msg_error "The Zurg support files were not found in the downloaded source"
+      exit 1
+    fi
+
+    install -d -m 0755 /zurg
+    if [[ ! -s /zurg/config.yml ]]; then
+      install -m 0644 "$source_dir/config.yml" /zurg/config.yml
+      sed -i 's/^on_library_update: sh plex_update.sh.*$/# &/' /zurg/config.yml
+    fi
+    if [[ ! -s /zurg/plex_update.sh ]]; then
+      install -m 0755 "$source_dir/scripts/plex_update.sh" /zurg/plex_update.sh
+    fi
+    rm -rf "$source_dir"
+  }
+
+  resolve_controller_source() {
+    local requested="${1:-latest}"
+    case "${requested,,}" in
+      "" | latest | release | stable)
+        controller_source="release"
+        controller_branch=""
+        ;;
+      *)
+        controller_branch="${requested#branch:}"
+        ensure_dependencies git
+        if ! git check-ref-format --branch "$controller_branch" >/dev/null 2>&1; then
+          msg_error "Invalid DUMB controller branch: ${controller_branch}"
+          return 1
+        fi
+        controller_source="branch:${controller_branch}"
+        ;;
+    esac
+  }
+
+  persist_controller_source() {
+    install -d -m 0755 /etc/dumb
+    cat <<EOF >"$controller_source_file"
+${controller_source}
+EOF
+    chmod 0644 "$controller_source_file"
   }
 
   rollback_dumb_update() {
@@ -136,6 +193,10 @@ EOF
   reconcile_pgadmin_runtime
   msg_ok "Reconciled pgAdmin Runtime"
 
+  msg_info "Reconciling Zurg Support Files"
+  reconcile_zurg_support_files
+  msg_ok "Reconciled Zurg Support Files"
+
   if [[ -f "$backup_dir/.manifest" ]]; then
     msg_warn "Recovering an interrupted DUMB controller update"
     if grep -qxF /opt/dumb "$backup_dir/.manifest"; then
@@ -149,7 +210,40 @@ EOF
     msg_ok "Recovered the previous DUMB controller state"
   fi
 
-  if check_for_gh_release "dumb" "I-am-PUID-0/DUMB"; then
+  local configured_source="release"
+  if [[ -f "$controller_source_file" ]]; then
+    IFS= read -r configured_source <"$controller_source_file" || configured_source="release"
+  fi
+  if ! resolve_controller_source "$configured_source"; then
+    exit 1
+  fi
+  configured_source="$controller_source"
+
+  if [[ -v DUMB_CONTROLLER_BRANCH ]]; then
+    if ! resolve_controller_source "$DUMB_CONTROLLER_BRANCH"; then
+      exit 1
+    fi
+  fi
+  [[ "$controller_source" != "$configured_source" ]] && source_changed=1
+
+  if [[ -n "$controller_branch" ]]; then
+    if check_for_gh_branch "dumb" "I-am-PUID-0/DUMB" "$controller_branch"; then
+      update_available=1
+    else
+      update_check_status=$?
+    fi
+  elif check_for_gh_release "dumb" "I-am-PUID-0/DUMB"; then
+    update_available=1
+  else
+    update_check_status=$?
+  fi
+
+  if ((update_check_status != 0 && update_check_status != 1)); then
+    exit 1
+  fi
+  ((source_changed)) && update_available=1
+
+  if ((update_available)); then
     msg_info "Reconciling DUMB System Dependencies"
     $STD apt install -y \
       build-essential \
@@ -204,7 +298,11 @@ EOF
     rm -rf "$candidate_dir"
     if ! (
       set -e
-      CLEAN_INSTALL=1 fetch_and_deploy_gh_release "dumb" "I-am-PUID-0/DUMB" "tarball" "latest" "$candidate_dir"
+      if [[ -n "$controller_branch" ]]; then
+        CLEAN_INSTALL=1 fetch_and_deploy_gh_branch "dumb" "I-am-PUID-0/DUMB" "$controller_branch" "$candidate_dir"
+      else
+        CLEAN_INSTALL=1 fetch_and_deploy_gh_release "dumb" "I-am-PUID-0/DUMB" "tarball" "latest" "$candidate_dir"
+      fi
 
       $STD uv venv --seed --python 3.11 "$candidate_dir/venv"
       if [[ ! -x /opt/poetry/bin/poetry ]]; then
@@ -257,10 +355,16 @@ EOF
     if ((!ready)); then
       rollback_dumb_update "The updated DUMB controller failed health verification"
     fi
+    if ! persist_controller_source; then
+      rollback_dumb_update "The updated DUMB controller source selection could not be saved"
+    fi
     trap - INT TERM
     rm -rf "$backup_dir"
     msg_ok "Started and verified updated DUMB controller"
     msg_ok "Updated Successfully!"
+  elif ! persist_controller_source; then
+    msg_error "The DUMB controller source selection could not be saved"
+    exit 1
   fi
   exit
 }

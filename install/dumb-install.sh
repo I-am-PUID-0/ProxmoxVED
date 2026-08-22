@@ -79,7 +79,39 @@ msg_ok "Built PostgreSQL system_stats Extension"
 fetch_and_deploy_gh_release "rclone" "rclone/rclone" "prebuild" "latest" "/opt/rclone" "rclone-v*-linux-$(arch_resolve amd64 arm64).zip"
 install -m 0755 /opt/rclone/rclone /usr/local/bin/rclone
 
-fetch_and_deploy_gh_release "dumb" "I-am-PUID-0/DUMB" "tarball" "latest" "/opt/dumb"
+msg_info "Installing Zurg Support Files"
+ZURG_SUPPORT_DIR="/tmp/dumb-zurg-support"
+CLEAN_INSTALL=1 fetch_and_deploy_gh_branch "dumb-zurg-support" "debridmediamanager/zurg-public" "main" "$ZURG_SUPPORT_DIR"
+[[ -s "$ZURG_SUPPORT_DIR/config.yml" && -s "$ZURG_SUPPORT_DIR/scripts/plex_update.sh" ]]
+install -d -m 0755 /zurg
+install -m 0644 "$ZURG_SUPPORT_DIR/config.yml" /zurg/config.yml
+sed -i 's/^on_library_update: sh plex_update.sh.*$/# &/' /zurg/config.yml
+install -m 0755 "$ZURG_SUPPORT_DIR/scripts/plex_update.sh" /zurg/plex_update.sh
+rm -rf "$ZURG_SUPPORT_DIR"
+msg_ok "Installed Zurg Support Files"
+
+DUMB_CONTROLLER_BRANCH="${var_dumb_branch:-latest}"
+case "${DUMB_CONTROLLER_BRANCH,,}" in
+  "" | latest | release | stable)
+    DUMB_CONTROLLER_BRANCH=""
+    DUMB_CONTROLLER_SOURCE="release"
+    ;;
+  *)
+    DUMB_CONTROLLER_BRANCH="${DUMB_CONTROLLER_BRANCH#branch:}"
+    ensure_dependencies git
+    if ! git check-ref-format --branch "$DUMB_CONTROLLER_BRANCH" >/dev/null 2>&1; then
+      msg_error "Invalid DUMB controller branch: ${DUMB_CONTROLLER_BRANCH}"
+      exit 1
+    fi
+    DUMB_CONTROLLER_SOURCE="branch:${DUMB_CONTROLLER_BRANCH}"
+    ;;
+esac
+
+if [[ -n "$DUMB_CONTROLLER_BRANCH" ]]; then
+  fetch_and_deploy_gh_branch "dumb" "I-am-PUID-0/DUMB" "$DUMB_CONTROLLER_BRANCH" "/opt/dumb"
+else
+  fetch_and_deploy_gh_release "dumb" "I-am-PUID-0/DUMB" "tarball" "latest" "/opt/dumb"
+fi
 
 msg_info "Setting up DUMB Controller Environment"
 $STD uv venv --seed --python 3.11 /opt/poetry
@@ -92,6 +124,12 @@ $STD env \
   /opt/poetry/bin/poetry install --only main --no-root --sync --no-interaction
 $STD /opt/dumb/venv/bin/python -m pip check
 msg_ok "Set up DUMB Controller Environment"
+
+install -d -m 0755 /etc/dumb
+cat <<EOF >/etc/dumb/controller-source
+${DUMB_CONTROLLER_SOURCE}
+EOF
+chmod 0644 /etc/dumb/controller-source
 
 msg_info "Setting up pgAdmin Environment"
 $STD uv venv --seed --python 3.11 /pgadmin/venv
@@ -118,7 +156,6 @@ install -d -m 0755 \
   /data \
   /log \
   /mnt/debrid \
-  /zurg \
   /riven/backend/data \
   /zilean/app/data \
   /cli_debrid/data \
@@ -189,5 +226,8 @@ systemctl enable -q --now dumb
 msg_ok "Created DUMB Service"
 
 motd_ssh
-customize
+# DUMB is an application container. Keep the generic customizer from using the
+# Debian base-image name for /usr/bin/update; it must call ct/dumb.sh so the
+# controller updater (including branch selection) remains reachable.
+var_os="" customize
 cleanup_lxc

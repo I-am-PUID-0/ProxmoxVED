@@ -34,6 +34,15 @@
     "username": null,
     "password": null
   },
+  "app_vars": [
+    {
+      "name": "var_dumb_branch",
+      "label": "DUMB Controller Branch",
+      "type": "text",
+      "default": "latest",
+      "help": "Use latest for the current stable release, or enter dev or another I-am-PUID-0/DUMB branch for an advanced test installation; back up persistent state before testing branches"
+    }
+  ],
   "notes": [
     {
       "text": "DUMB and the services it manages are installed directly in the LXC; this script does not install Docker.",
@@ -52,8 +61,12 @@
       "type": "info"
     },
     {
-      "text": "Run update inside the LXC for a candidate-first DUMB controller update with health verification and automatic rollback. Update individual managed services through the DUMB Updates interface.",
+      "text": "Run update inside the LXC for a candidate-first DUMB controller update with health verification and automatic rollback. Branch installs continue tracking their selected branch; use DUMB_CONTROLLER_BRANCH=dev update to switch branches or DUMB_CONTROLLER_BRANCH=latest update to return to stable. Update individual managed services through the DUMB Updates interface.",
       "type": "info"
+    },
+    {
+      "text": "Development branches can change configuration or application state. The controller rollback restores the prior /opt/dumb runtime but does not reverse changes under /config or /data; take an independent backup before switching channels.",
+      "type": "warning"
     }
   ]
 }
