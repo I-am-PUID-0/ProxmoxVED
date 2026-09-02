@@ -57,12 +57,27 @@ function update_script() {
 RemoveIPC=no
 EOF
     systemctl reload systemd-logind
+    local unit unit_path dropin_dir
+    for unit in plexmediaserver.service jellyfin.service; do
+      unit_path="/etc/systemd/system/${unit}"
+      if [[ -L "$unit_path" && "$(readlink "$unit_path")" == "/dev/null" ]]; then
+        rm -f "$unit_path"
+      fi
+      dropin_dir="/etc/systemd/system/${unit}.d"
+      install -d -m 0755 "$dropin_dir"
+      cat <<'EOF' >"${dropin_dir}/dumb-native-supervision.conf"
+[Unit]
+# Package maintainer scripts may enable or start this unit. Keep the
+# package-owned supervisor inactive because DUMB launches the binary directly.
+ConditionPathExists=/run/dumb-allow-package-services
+EOF
+    done
+    systemctl daemon-reload
     systemctl disable --now -q \
       plexmediaserver.service \
       jellyfin.service \
       postgresql.service 2>/dev/null || true
-    local unit
-    for unit in plexmediaserver.service jellyfin.service postgresql.service 'postgresql@.service'; do
+    for unit in postgresql.service 'postgresql@.service'; do
       ln -sfn /dev/null "/etc/systemd/system/${unit}"
     done
     systemctl daemon-reload
