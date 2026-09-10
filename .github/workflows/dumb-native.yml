@@ -1,0 +1,34 @@
+name: DUMB native runtime regression
+
+on:
+  pull_request:
+    paths:
+      - "ct/dumb.sh"
+      - "install/dumb-install.sh"
+      - "tools/tests/dumb-dotnet.sh"
+      - ".github/workflows/dumb-native.yml"
+  push:
+    branches: [main, feat/dumb]
+    paths:
+      - "ct/dumb.sh"
+      - "install/dumb-install.sh"
+      - "tools/tests/dumb-dotnet.sh"
+      - ".github/workflows/dumb-native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out unchanged shared engine
+        uses: actions/checkout@v4
+        with:
+          repository: community-scripts/core
+          ref: main
+          path: .test-core
+      - name: Test DUMB .NET setup against upstream core
+        run: bash tools/tests/dumb-dotnet.sh .test-core

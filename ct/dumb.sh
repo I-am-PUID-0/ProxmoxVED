@@ -28,6 +28,39 @@ variables
 color
 catch_errors
 
+# Keep this wrapper identical in ct/dumb.sh and install/dumb-install.sh.
+# The subshell limits the probe override to DUMB's .NET setup only.
+setup_dumb_dotnet() (
+  local -A dumb_verified_repos=()
+  local distro_id distro_version distro_codename repo_url
+
+  verify_repo_available() {
+    local repo_url="$1" suite="$2" cache_key="$1|$2"
+    [[ "${dumb_verified_repos[$cache_key]:-}" == "yes" ]] && return 0
+    if curl -fsSL --retry 2 --retry-connrefused --max-time 15 --connect-timeout 5 \
+      "${repo_url}/dists/${suite}/Release" >/dev/null; then
+      dumb_verified_repos[$cache_key]="yes"
+      return 0
+    fi
+    return 1
+  }
+
+  distro_id=$(get_os_info id)
+  distro_version=$(get_os_info version_id)
+  distro_codename=$(get_os_info codename)
+  if [[ "$distro_id" == "debian" ]]; then
+    repo_url="https://packages.microsoft.com/${distro_id}/${distro_version}/prod"
+    # Core removes existing sources before its probe. Check first and reuse
+    # this success within this invocation, preserving sources on probe failure.
+    if ! verify_repo_available "$repo_url" "$distro_codename"; then
+      msg_error "Unable to reach the Microsoft .NET feed for ${distro_id} ${distro_version} (${distro_codename}); existing repository configuration was preserved"
+      return 100
+    fi
+  fi
+
+  DOTNET_VERSION="10" DOTNET_TYPE="sdk" setup_dotnet
+)
+
 function update_script() {
   header_info
   check_container_storage
@@ -285,10 +318,12 @@ EOF
       pgagent
     msg_ok "Reconciled DUMB System Dependencies"
 
+    # Reuse the engine's vendor-specific drivers and Debian non-free setup.
+    ENABLE_GPU="${ENABLE_GPU:-yes}" setup_hwaccel
     setup_ffmpeg
     NODE_VERSION="24" NODE_MODULE="pnpm@^10" setup_nodejs
     setup_go
-    DOTNET_VERSION="10" DOTNET_TYPE="sdk" setup_dotnet
+    setup_dumb_dotnet
     UV_PYTHON_INSTALL_DIR="/opt/dumb-python" PYTHON_VERSION="3.11" setup_uv
 
     UV_PYTHON_INSTALL_DIR="/opt/dumb-python" PYTHON_VERSION="3.12" setup_uv
