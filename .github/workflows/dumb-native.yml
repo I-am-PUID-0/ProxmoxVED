@@ -6,6 +6,7 @@ on:
       - "ct/dumb.sh"
       - "install/dumb-install.sh"
       - "tools/tests/dumb-dotnet.sh"
+      - "tools/tests/dumb-opencl.sh"
       - ".github/workflows/dumb-native.yml"
   push:
     branches: [main, feat/dumb]
@@ -13,6 +14,7 @@ on:
       - "ct/dumb.sh"
       - "install/dumb-install.sh"
       - "tools/tests/dumb-dotnet.sh"
+      - "tools/tests/dumb-opencl.sh"
       - ".github/workflows/dumb-native.yml"
   workflow_dispatch:
 
@@ -32,3 +34,5 @@ jobs:
           path: .test-core
       - name: Test DUMB .NET setup against upstream core
         run: bash tools/tests/dumb-dotnet.sh .test-core
+      - name: Test DUMB Intel OpenCL setup against upstream core
+        run: bash tools/tests/dumb-opencl.sh .test-core

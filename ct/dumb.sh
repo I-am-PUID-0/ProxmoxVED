@@ -61,6 +61,119 @@ setup_dumb_dotnet() (
   DOTNET_VERSION="10" DOTNET_TYPE="sdk" setup_dotnet
 )
 
+# Keep this wrapper identical in ct/dumb.sh and install/dumb-install.sh.
+# Core's Gen9+ group also contains newer UHD/Iris GPUs. Install both supported
+# OpenCL families for that selected Intel stack instead of guessing its generation.
+setup_dumb_hwaccel() (
+  local dumb_opencl_probe=no dumb_legacy_preflight=no dumb_opencl_metadata_dir=""
+
+  _dumb_preflight_legacy_opencl_release() {
+    local repository="$1" tag="$2" metadata
+    shift 2
+    if [[ -z "$dumb_opencl_metadata_dir" ]]; then
+      dumb_opencl_metadata_dir=$(mktemp -d) || return 100
+      trap 'rm -rf -- "$dumb_opencl_metadata_dir"' EXIT
+    fi
+    metadata="$dumb_opencl_metadata_dir/${repository##*/}.json"
+    if ! _forge_release_json github "$repository" "$tag" "" "$metadata" ||
+      ! jq -e --arg tag "$tag" --arg repository "$repository" --args \
+        '. as $release | .tag_name == $tag and
+         all($ARGS.positional[]; . as $name |
+           any($release.assets[]?; .name == $name and
+             .browser_download_url == ("https://github.com/" + $repository +
+               "/releases/download/" + $tag + "/" + $name)))' "$@" <"$metadata" >/dev/null; then
+      msg_error "Required Intel legacy release assets are unavailable; Intel driver update stopped"
+      return 100
+    fi
+  }
+
+  _dumb_install_legacy_opencl_package() {
+    local package="$1" version="$2" repository="$3" tag="$4" asset="$5"
+    local installed
+    installed=$(dpkg-query -W -f='${db:Status-Status} ${Version}' "$package" 2>/dev/null) || installed=""
+    [[ "$installed" == "installed $version" ]] && return 0
+
+    # Core's binary helper can fall back to another .deb. Check every required
+    # exact asset before installing the first missing compatibility package.
+    if [[ "$dumb_legacy_preflight" != yes ]]; then
+      _dumb_preflight_legacy_opencl_release "intel/intel-graphics-compiler" "igc-1.0.17537.24" \
+        "intel-igc-core_1.0.17537.24_amd64.deb" \
+        "intel-igc-opencl_1.0.17537.24_amd64.deb" || return "$?"
+      _dumb_preflight_legacy_opencl_release "intel/compute-runtime" "24.35.30872.36" \
+        "intel-opencl-icd-legacy1_24.35.30872.36_amd64.deb" || return "$?"
+      dumb_legacy_preflight=yes
+    fi
+
+    # Separate markers from core's IGC2 packages. A DUMB version override must
+    # never replace the explicitly compatible Intel legacy release.
+    FORCE_UPDATE=1 var_appversion="" fetch_and_deploy_gh_release "${package}-dumb-legacy" \
+      "$repository" "binary" "$tag" "" "$asset" || {
+      msg_error "Could not install $package $version; Intel driver update stopped before the current runtime was changed"
+      return 100
+    }
+    installed=$(dpkg-query -W -f='${db:Status-Status} ${Version}' "$package" 2>/dev/null) || installed=""
+    if [[ "$installed" != "installed $version" ]]; then
+      msg_error "$package $version was not installed; Intel driver update stopped before the current runtime was changed"
+      return 100
+    fi
+  }
+
+  _dumb_prepare_legacy_opencl() {
+    [[ "$1" == "debian" && ("$2" == "trixie" || "$2" == "sid") ]] || return 0
+    if [[ "$(dpkg --print-architecture)" != "amd64" ]]; then
+      msg_warn "Intel legacy OpenCL packages are only available for amd64; OpenCL tone mapping was not verified"
+      return 0
+    fi
+
+    $STD apt install -y ocl-icd-libopencl1 clinfo || {
+      msg_error "Could not prepare Intel OpenCL dependencies; Intel driver update stopped"
+      return 100
+    }
+    # Intel maintains Gen8/9/11 support in the 24.35 legacy family. These
+    # compatible releases also ship together in Jellyfin's official image.
+    # https://github.com/intel/compute-runtime/blob/master/documentation/LEGACY_PLATFORMS.md
+    _dumb_install_legacy_opencl_package "intel-igc-core" "1.0.17537.24" \
+      "intel/intel-graphics-compiler" "igc-1.0.17537.24" \
+      "intel-igc-core_1.0.17537.24_amd64.deb" || return "$?"
+    _dumb_install_legacy_opencl_package "intel-igc-opencl" "1.0.17537.24" \
+      "intel/intel-graphics-compiler" "igc-1.0.17537.24" \
+      "intel-igc-opencl_1.0.17537.24_amd64.deb" || return "$?"
+    _dumb_install_legacy_opencl_package "intel-opencl-icd-legacy1" "24.35.30872.36" \
+      "intel/compute-runtime" "24.35.30872.36" \
+      "intel-opencl-icd-legacy1_24.35.30872.36_amd64.deb" || return "$?"
+    dumb_opencl_probe=yes
+  }
+
+  _dumb_probe_intel_opencl() {
+    local platforms
+    if platforms=$(timeout 20 clinfo -l 2>&1) &&
+      awk '/^Platform #[0-9]+:/ { intel = tolower($0) ~ /intel.*graphics/ }
+           intel && /Device #[0-9]+:/ { found = 1 }
+           END { exit !found }' <<<"$platforms"; then
+      msg_ok "Intel OpenCL GPU detected; HDR tone mapping still needs a Jellyfin playback test"
+    else
+      msg_warn "Intel OpenCL did not enumerate a GPU. QSV/VAAPI may still work; leave OpenCL tone mapping disabled until clinfo -l detects the passed-through Intel GPU"
+    fi
+  }
+
+  # Scope the override to the selected core handler and this invocation. Disabled
+  # passthrough, other vendors and the separate Gen6-8 handler keep core behavior.
+  if ! declare -F _setup_intel_modern >/dev/null || ! declare -F _forge_release_json >/dev/null; then
+    msg_error "The shared GPU helper has changed; Intel compatibility setup could not be verified"
+    return 100
+  fi
+  eval "$(declare -f _setup_intel_modern | sed '1s/_setup_intel_modern/_dumb_core_setup_intel_modern/')"
+  _setup_intel_modern() {
+    _dumb_prepare_legacy_opencl "$@" || exit "$?"
+    _dumb_core_setup_intel_modern "$@" || return "$?"
+    if [[ "$dumb_opencl_probe" == yes ]]; then
+      _dumb_probe_intel_opencl
+    fi
+  }
+
+  setup_hwaccel "$@"
+)
+
 function update_script() {
   header_info
   check_container_storage
@@ -318,8 +431,8 @@ EOF
       pgagent
     msg_ok "Reconciled DUMB System Dependencies"
 
-    # Reuse the engine's vendor-specific drivers and Debian non-free setup.
-    ENABLE_GPU="${ENABLE_GPU:-yes}" setup_hwaccel
+    # Reuse core GPU selection and preserve Intel legacy OpenCL during updates.
+    ENABLE_GPU="${ENABLE_GPU:-yes}" setup_dumb_hwaccel
     setup_ffmpeg
     NODE_VERSION="24" NODE_MODULE="pnpm@^10" setup_nodejs
     setup_go
